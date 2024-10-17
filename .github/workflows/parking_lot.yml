@@ -1,0 +1,43 @@
+name: Parking Lot CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Copy .env
+      run: cp src/myapp/.env.example src/myapp/.env
+
+    - name: Build Docker images
+      run: docker-compose build
+
+    - name: Start Docker containers
+      run: docker-compose up -d
+
+    - name: Wait for services to be ready
+      run: |
+        docker-compose exec -T my-app bash -c 'until nc -z my-db 5432; do echo "Waiting for PostgreSQL"; sleep 1; done'
+        docker-compose exec -T my-app bash -c 'until nc -z my-cache 6379; do echo "Waiting for Redis"; sleep 1; done'
+
+    - name: Install dependencies
+      run: docker-compose exec -T my-app composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+    - name: Generate application key
+      run: docker-compose exec -T my-app php artisan key:generate
+
+    - name: Run database migrations
+      run: docker-compose exec -T my-app php artisan migrate --force
+
+    - name: Run tests
+      run: docker-compose exec -T my-app vendor/bin/phpunit
+
+    - name: Stop Docker containers
+      run: docker-compose down
