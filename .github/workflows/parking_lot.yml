@@ -13,10 +13,6 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Copy .env
-      run: cp .env .env
-      working-directory: ./src/myapp
-
     - name: Build Docker images
       run: docker-compose build
 
