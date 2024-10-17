@@ -8,6 +8,7 @@ use App\Models\VehicleType;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ParkingLotService
 {
@@ -96,6 +97,11 @@ class ParkingLotService
                     if ($spaceNumber !== null) {
                         return $spaceNumber;
                     }
+                } elseif ($vehicleType === 'motorcycle') {
+                    $spaceNumber = $this->attemptToParkMotorcycleInLargerSpace($parkingLotId);
+                    if ($spaceNumber !== null) {
+                        return $spaceNumber;
+                    }
                 }
 
                 throw new \Exception('No available parking spaces for this vehicle type');
@@ -125,6 +131,8 @@ class ParkingLotService
                 }
 
                 return true;
+            } catch (ModelNotFoundException $e) {
+                throw new ModelNotFoundException('No vehicle found in the specified parking space.', 404);
             } catch (\Exception $e) {
                 Log::error('Error unparking vehicle: ' . $e->getMessage());
                 throw $e;
@@ -347,5 +355,45 @@ class ParkingLotService
             $this->freeSpace($space);
             $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id);
         });
+    }
+
+    private function attemptToParkMotorcycleInLargerSpace($parkingLotId)
+    {
+        $motorcycleTypeId = $this->getVehicleTypeId('motorcycle');
+
+        $spaceNumber = $this->parkMotorcycleInCarSpace($parkingLotId, $motorcycleTypeId);
+        if ($spaceNumber !== null) {
+            return $spaceNumber;
+        }
+
+        return $this->parkMotorcycleInVanSpace($parkingLotId, $motorcycleTypeId);
+    }
+
+    private function parkMotorcycleInCarSpace($parkingLotId, $motorcycleTypeId)
+    {
+        $carTypeId = $this->getVehicleTypeId('car');
+        return $this->parkMotorcycleInLargerSpaceType($parkingLotId, $carTypeId, $motorcycleTypeId);
+    }
+
+    private function parkMotorcycleInVanSpace($parkingLotId, $motorcycleTypeId)
+    {
+        $vanTypeId = $this->getVehicleTypeId('van');
+        return $this->parkMotorcycleInLargerSpaceType($parkingLotId, $vanTypeId, $motorcycleTypeId);
+    }
+
+    private function parkMotorcycleInLargerSpaceType($parkingLotId, $largerVehicleTypeId, $motorcycleTypeId)
+    {
+        $availableSpace = $this->getAvailableSpace($parkingLotId, $largerVehicleTypeId);
+        if ($availableSpace) {
+            return $this->occupySpaceWithMotorcycle($parkingLotId, $availableSpace, $largerVehicleTypeId, $motorcycleTypeId);
+        }
+        return null;
+    }
+
+    private function occupySpaceWithMotorcycle($parkingLotId, $space, $originalTypeId, $motorcycleTypeId)
+    {
+        $this->occupySpace($space, $motorcycleTypeId);
+        $this->decrementAvailableCapacity($parkingLotId, $originalTypeId);
+        return $space->space_number;
     }
 }

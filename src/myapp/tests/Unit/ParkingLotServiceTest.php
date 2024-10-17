@@ -374,6 +374,41 @@ class ParkingLotServiceTest extends TestCase
         }
     }
 
+    public function testParkMotorcycleInCarSpaceWhenMotorcycleSpacesAreFull()
+    {
+        $parkingLot = ParkingLot::factory()->create();
+        $motorcycleType = VehicleType::where('name', 'motorcycle')->first();
+        $carType = VehicleType::where('name', 'car')->first();
+
+        // Create 1 occupied motorcycle space
+        ParkingSpace::factory()->create([
+            'parking_lot_id' => $parkingLot->id,
+            'vehicle_type_id' => $motorcycleType->id,
+            'is_occupied' => true,
+        ]);
+
+        // Create 1 free car space
+        $carSpace = ParkingSpace::factory()->create([
+            'parking_lot_id' => $parkingLot->id,
+            'vehicle_type_id' => $carType->id,
+            'is_occupied' => false,
+        ]);
+
+        $this->parkingLotService->syncCapacityCache($parkingLot->id);
+
+        // Attempt to park a motorcycle
+        $spaceNumber = $this->parkingLotService->park($parkingLot->id, 'motorcycle');
+
+        // Assert the motorcycle was parked in the car space
+        $this->assertEquals($carSpace->space_number, $spaceNumber);
+        $this->assertTrue($carSpace->fresh()->is_occupied);
+        $this->assertEquals($motorcycleType->id, $carSpace->fresh()->parked_vehicle_type_id);
+
+        // Assert the cache has been updated correctly
+        $this->assertEquals(0, Redis::get("parking_lot:{$parkingLot->id}:available:{$carType->id}"));
+        $this->assertEquals(0, Redis::get("parking_lot:{$parkingLot->id}:available:{$motorcycleType->id}"));
+    }
+
     protected function tearDown(): void
     {
         Artisan::call('cache:clear');

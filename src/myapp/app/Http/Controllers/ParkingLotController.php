@@ -7,6 +7,7 @@ use App\Models\ParkingLot;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ParkingLotController extends Controller
 {
@@ -43,6 +44,8 @@ class ParkingLotController extends Controller
 
             $this->parkingLotService->unpark($parkingLotId, $spaceNumber);
             return response()->json(['message' => 'Vehicle unparked successfully'], 200);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => $e->getMessage()], 404);
         } catch (\Exception $e) {
             return response()->json(['error' => $e->getMessage()], 400);
         }
