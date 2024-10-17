@@ -83,21 +83,26 @@ class ParkingLotService
     public function park($parkingLotId, $vehicleType)
     {
         return DB::transaction(function () use ($parkingLotId, $vehicleType) {
-            $parkingLot = ParkingLot::findOrFail($parkingLotId);
-            $vehicleTypeId = $this->getVehicleTypeId($vehicleType);
+            try {
+                $parkingLot = ParkingLot::findOrFail($parkingLotId);
+                $vehicleTypeId = $this->getVehicleTypeId($vehicleType);
 
-            if ($this->hasAvailableSpaceForVehicleType($parkingLotId, $vehicleTypeId)) {
-                return $this->parkInAvailableSpace($parkingLotId, $vehicleTypeId);
-            }
-
-            if ($vehicleType === 'van') {
-                $spaceNumber = $this->attemptToParkVanInCarSpaces($parkingLotId);
-                if ($spaceNumber !== null) {
-                    return $spaceNumber;
+                if ($this->hasAvailableSpaceForVehicleType($parkingLotId, $vehicleTypeId)) {
+                    return $this->parkInAvailableSpace($parkingLotId, $vehicleTypeId);
                 }
-            }
 
-            throw new \Exception('No available parking spaces for this vehicle type');
+                if ($vehicleType === 'van') {
+                    $spaceNumber = $this->attemptToParkVanInCarSpaces($parkingLotId);
+                    if ($spaceNumber !== null) {
+                        return $spaceNumber;
+                    }
+                }
+
+                throw new \Exception('No available parking spaces for this vehicle type');
+            } catch (\Exception $e) {
+                Log::error('Error parking vehicle: ' . $e->getMessage());
+                throw $e;
+            }
         });
     }
 
@@ -108,6 +113,7 @@ class ParkingLotService
                 $space = ParkingSpace::where('parking_lot_id', $parkingLotId)
                     ->where('space_number', $spaceNumber)
                     ->where('is_occupied', true)
+                    ->lockForUpdate()
                     ->firstOrFail();
 
                 $parkedVehicleType = VehicleType::findOrFail($space->parked_vehicle_type_id);
@@ -115,12 +121,12 @@ class ParkingLotService
                 if ($parkedVehicleType->name === 'van' && $space->vehicle_type_id === $this->getVehicleTypeId('car')) {
                     $this->unparkVanFromCarSpaces($parkingLotId, $space);
                 } else {
-                    $this->freeSpace($space);
-                    $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id);
+                    $this->unparkRegularVehicle($parkingLotId, $space);
                 }
 
                 return true;
             } catch (\Exception $e) {
+                Log::error('Error unparking vehicle: ' . $e->getMessage());
                 throw $e;
             }
         });
@@ -169,8 +175,12 @@ class ParkingLotService
     private function parkInAvailableSpace($parkingLotId, $vehicleTypeId)
     {
         $space = $this->getAvailableSpace($parkingLotId, $vehicleTypeId);
-        $this->occupySpace($space, $vehicleTypeId);
-        $this->decrementAvailableCapacity($parkingLotId, $vehicleTypeId);
+
+        Redis::transaction(function () use ($parkingLotId, $space, $vehicleTypeId) {
+            $this->occupySpace($space, $vehicleTypeId);
+            $this->decrementAvailableCapacity($parkingLotId, $vehicleTypeId);
+        });
+
         return $space->space_number;
     }
 
@@ -259,14 +269,14 @@ class ParkingLotService
 
     private function decrementAvailableCapacity($parkingLotId, $vehicleTypeId, $count = 1)
     {
-        Redis::decr("parking_lot:{$parkingLotId}:available_capacity", $count);
-        Redis::decr("parking_lot:{$parkingLotId}:available:{$vehicleTypeId}", $count);
+        Redis::decrby("parking_lot:{$parkingLotId}:available_capacity", $count);
+        Redis::decrby("parking_lot:{$parkingLotId}:available:{$vehicleTypeId}", $count);
     }
 
     private function incrementAvailableCapacity($parkingLotId, $vehicleTypeId, $count = 1)
     {
-        Redis::incr("parking_lot:{$parkingLotId}:available_capacity", $count);
-        Redis::incr("parking_lot:{$parkingLotId}:available:{$vehicleTypeId}", $count);
+        Redis::incrby("parking_lot:{$parkingLotId}:available_capacity", $count);
+        Redis::incrby("parking_lot:{$parkingLotId}:available:{$vehicleTypeId}", $count);
     }
 
     public function createNewParkingLot($name, $capacities)
@@ -320,12 +330,22 @@ class ParkingLotService
             ->where('space_number', '<', $space->space_number + 3)
             ->where('is_occupied', true)
             ->where('parked_vehicle_type_id', $space->parked_vehicle_type_id)
+            ->lockForUpdate()
             ->get();
 
-        foreach ($spacesToFree as $spaceToFree) {
-            $this->freeSpace($spaceToFree);
-        }
+        Redis::transaction(function () use ($parkingLotId, $spacesToFree, $space) {
+            foreach ($spacesToFree as $spaceToFree) {
+                $this->freeSpace($spaceToFree);
+            }
+            $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id, $spacesToFree->count());
+        });
+    }
 
-        $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id, $spacesToFree->count());
+    private function unparkRegularVehicle($parkingLotId, $space)
+    {
+        Redis::transaction(function () use ($parkingLotId, $space) {
+            $this->freeSpace($space);
+            $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id);
+        });
     }
 }
