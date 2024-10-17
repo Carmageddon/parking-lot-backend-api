@@ -17,20 +17,40 @@ class ParkingLotService
         $totalCapacity = $parkingLot->parkingSpaces()->count();
         $availableCapacity = $parkingLot->parkingSpaces()->where('is_occupied', false)->count();
 
-        Redis::set("parking_lot:{$parkingLotId}:total_capacity", $totalCapacity);
-        Redis::set("parking_lot:{$parkingLotId}:available_capacity", $availableCapacity);
+        $this->updateTotalCapacityCache($parkingLotId, $totalCapacity, $availableCapacity);
 
         $vehicleTypes = VehicleType::all();
         foreach ($vehicleTypes as $vehicleType) {
-            $typeCapacity = $parkingLot->parkingSpaces()->where('vehicle_type_id', $vehicleType->id)->count();
-            $typeAvailable = $parkingLot->parkingSpaces()
-                ->where('vehicle_type_id', $vehicleType->id)
-                ->where('is_occupied', false)
-                ->count();
-
-            Redis::set("parking_lot:{$parkingLotId}:capacity:{$vehicleType->id}", $typeCapacity);
-            Redis::set("parking_lot:{$parkingLotId}:available:{$vehicleType->id}", $typeAvailable);
+            $this->updateVehicleTypeCapacityCache($parkingLotId, $parkingLot, $vehicleType);
         }
+    }
+
+    private function updateTotalCapacityCache($parkingLotId, $totalCapacity, $availableCapacity)
+    {
+        Redis::set("parking_lot:{$parkingLotId}:total_capacity", $totalCapacity);
+        Redis::set("parking_lot:{$parkingLotId}:available_capacity", $availableCapacity);
+    }
+
+    private function updateVehicleTypeCapacityCache($parkingLotId, $parkingLot, $vehicleType)
+    {
+        $typeCapacity = $this->getVehicleTypeCapacity($parkingLot, $vehicleType);
+        $typeAvailable = $this->getAvailableVehicleTypeCapacity($parkingLot, $vehicleType);
+
+        Redis::set("parking_lot:{$parkingLotId}:capacity:{$vehicleType->id}", $typeCapacity);
+        Redis::set("parking_lot:{$parkingLotId}:available:{$vehicleType->id}", $typeAvailable);
+    }
+
+    private function getVehicleTypeCapacity($parkingLot, $vehicleType)
+    {
+        return $parkingLot->parkingSpaces()->where('vehicle_type_id', $vehicleType->id)->count();
+    }
+
+    private function getAvailableVehicleTypeCapacity($parkingLot, $vehicleType)
+    {
+        return $parkingLot->parkingSpaces()
+            ->where('vehicle_type_id', $vehicleType->id)
+            ->where('is_occupied', false)
+            ->count();
     }
 
     public function initializeNewParkingLot($parkingLotId, $capacities)
@@ -93,21 +113,8 @@ class ParkingLotService
                 $parkedVehicleType = VehicleType::findOrFail($space->parked_vehicle_type_id);
 
                 if ($parkedVehicleType->name === 'van' && $space->vehicle_type_id === $this->getVehicleTypeId('car')) {
-                    // Unpark van from car spaces
-                    $spacesToFree = ParkingSpace::where('parking_lot_id', $parkingLotId)
-                        ->where('space_number', '>=', $spaceNumber)
-                        ->where('space_number', '<', $spaceNumber + 3)
-                        ->where('is_occupied', true)
-                        ->where('parked_vehicle_type_id', $space->parked_vehicle_type_id)
-                        ->get();
-
-                    foreach ($spacesToFree as $spaceToFree) {
-                        $this->freeSpace($spaceToFree);
-                    }
-
-                    $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id, $spacesToFree->count());
+                    $this->unparkVanFromCarSpaces($parkingLotId, $space);
                 } else {
-                    // Unpark regular vehicle
                     $this->freeSpace($space);
                     $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id);
                 }
@@ -304,5 +311,21 @@ class ParkingLotService
             'is_occupied' => false,
             'parked_vehicle_type_id' => null
         ]);
+    }
+
+    private function unparkVanFromCarSpaces($parkingLotId, $space)
+    {
+        $spacesToFree = ParkingSpace::where('parking_lot_id', $parkingLotId)
+            ->where('space_number', '>=', $space->space_number)
+            ->where('space_number', '<', $space->space_number + 3)
+            ->where('is_occupied', true)
+            ->where('parked_vehicle_type_id', $space->parked_vehicle_type_id)
+            ->get();
+
+        foreach ($spacesToFree as $spaceToFree) {
+            $this->freeSpace($spaceToFree);
+        }
+
+        $this->incrementAvailableCapacity($parkingLotId, $space->vehicle_type_id, $spacesToFree->count());
     }
 }
