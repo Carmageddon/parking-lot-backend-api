@@ -1,4 +1,9 @@
-# Technical Interview Challenge 1
+# Example portfolio application using PHP with Laravel
+Demonstrating:
+- RESTful API
+- Caching using Redis
+- DB and Eloquent ORM usage
+- PHP unit tests
 
 ## Installation
 
