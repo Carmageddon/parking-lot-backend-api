@@ -4,6 +4,7 @@ Demonstrating:
 - Caching using Redis
 - DB and Eloquent ORM usage
 - PHP unit tests
+- CI/CD integration into Github Actions
 
 ## Installation
 
